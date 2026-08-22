@@ -1,0 +1,33 @@
+name: Scrape site1
+
+on:
+  workflow_dispatch: {} # Actionsタブから手動実行できるようにする（定期実行はしない）
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scraper
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: scraper/package-lock.json
+
+      - run: npm ci
+
+      - name: Run scraper
+        env:
+          SITE1_URL: ${{ secrets.SITE1_URL }}
+          CONFIG_API_URL: ${{ secrets.CONFIG_API_URL }}
+        run: node scrape.js --out result.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scrape-result
+          path: scraper/result.json
+          retention-days: 14

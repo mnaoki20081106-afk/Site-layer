@@ -16,6 +16,8 @@
 - `public/admin.html` — 管理画面。サイト①・サイト②のURLと、サイト②の重ね方（位置/サイズ/不透明度/クリック対象）を設定します。
 - `src/index.js` — Cloudflare Worker本体。`/api/config` の GET（設定取得）・POST（設定更新、要トークン認証）を処理し、Cloudflare KV に保存します。`/` と `/index.html` はサイト①をプロキシしてサイト②を注入します（上記「仕組み」を参照）。それ以外のパスは `public/` 配下の静的ファイルをそのまま返します（Workers Static Assets）。
 - `wrangler.toml` — Worker名、エントリポイント（`src/index.js`）、静的アセットのディレクトリ（`public`）、KVバインディングを設定。
+- `render-service/` — サイト①のボット対策が、Worker自身の `fetch()`（ブラウザではない機械的アクセス）をブロックしてしまう場合に使う、別ホストで動かすPuppeteer Stealthのレンダリングサービス。詳細は `render-service/README.md` を参照。設定すると、`/` ・`/index.html` はサイト①を直接 `fetch()` する代わりにこのサービス経由で取得するようになります（未設定時は従来通り直接 `fetch()`）。
+- `scraper/` — サイト①の内容を、必要なときに手動（または GitHub Actions の手動実行）でPuppeteer Stealth経由で取得・保存するための独立したCLIツール。オーバーレイページ本体の動作には影響しません。詳細は `scraper/README.md` を参照。
 
 ## デプロイ手順（Cloudflareダッシュボード、ブラウザのみでOK）
 
@@ -40,11 +42,19 @@
    - Value: 好きな長いランダム文字列（後で管理画面のログインに使うので必ずメモ）
    - Type: Secret（暗号化）
 
-4. **再デプロイ**
+4. **（任意）render-serviceを設定してサイト①へのアクセスをPuppeteer Stealth化**
+
+   サイト①のボット対策が強く、Workerからの直接 `fetch()` がブロックされてしまう場合は、`render-service/README.md` の手順で別ホスト（Railway等）にPuppeteer Stealthのサービスをデプロイし、同じく「Settings」→「Variables and Secrets」で以下を追加してください。
+   - `RENDER_SERVICE_URL`（Variable） = `https://<render-serviceのURL>/render`
+   - `RENDER_SERVICE_TOKEN`（Secret） = render-service側に設定したのと同じトークン
+
+   未設定の場合は、従来通りWorkerがサイト①を直接 `fetch()` します。
+
+5. **再デプロイ**
 
    バインディングやシークレットの追加後は、mainブランチに新しいコミットをpushして新規デプロイを発生させてください（Cloudflareの「Retry deployment」は最初の接続時ビルドには使えないため）。
 
-5. デプロイ後に発行されるURL（例: `https://site-layer.<subdomain>.workers.dev`、または独自ドメイン設定時はそのドメイン）で、以下にアクセスできます。
+6. デプロイ後に発行されるURL（例: `https://site-layer.<subdomain>.workers.dev`、または独自ドメイン設定時はそのドメイン）で、以下にアクセスできます。
 
    - `/index.html` — オーバーレイ表示ページ（公開用）
    - `/admin.html` — 管理画面（URLを知っている人のみがアクセスする想定。必要であれば Cloudflare Access 等でさらにアクセス制限してください）

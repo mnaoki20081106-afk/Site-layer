@@ -258,6 +258,68 @@ async function extractOgp(url) {
   }
 }
 
+// Fetches site1 the plain way: a direct server-side fetch(). This is what
+// site1's bot detection (if any) sees as a non-browser request and may
+// block - see fetchSite1ViaRenderService for the alternative.
+async function fetchSite1Direct(site1Url) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(site1Url, { signal: controller.signal, redirect: "follow" });
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("text/html")) {
+      return { isHtml: false, status: res.status, contentType, body: res.body };
+    }
+    return { isHtml: true, status: res.status, contentType, finalUrl: res.url, htmlResponse: res };
+  } catch {
+    return null;
+  }
+}
+
+// Fetches site1 through render-service (see render-service/), a separate
+// Puppeteer + stealth-plugin HTTP service, so the request looks like a real
+// browser instead of a raw edge fetch() that site1's bot detection can
+// fingerprint and block. Used only when RENDER_SERVICE_URL/TOKEN are set;
+// otherwise serveOverlayPage falls back to fetchSite1Direct.
+async function fetchSite1ViaRenderService(site1Url, env) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 25000);
+    const endpoint = new URL(env.RENDER_SERVICE_URL);
+    endpoint.searchParams.set("url", site1Url);
+    const res = await fetch(endpoint.toString(), {
+      signal: controller.signal,
+      headers: { authorization: `Bearer ${env.RENDER_SERVICE_TOKEN || ""}` },
+    });
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    if (!data.ok) return null;
+
+    const contentType = data.contentType || "text/html; charset=utf-8";
+    if (!contentType.includes("text/html")) return null;
+
+    return {
+      isHtml: true,
+      status: data.status || 200,
+      contentType,
+      finalUrl: data.finalUrl || site1Url,
+      htmlResponse: new Response(data.html, { status: data.status || 200, headers: { "content-type": contentType } }),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function fetchSite1(site1Url, env) {
+  if (env.RENDER_SERVICE_URL) return fetchSite1ViaRenderService(site1Url, env);
+  return fetchSite1Direct(site1Url);
+}
+
 // Proxies site1Url as this page's own top-level document (instead of an
 // iframe) so that links inside it - including app deep links / universal
 // links (e.g. opening the YouTube app) - navigate the real top-level
@@ -271,23 +333,13 @@ async function serveOverlayPage(request, env) {
     return noStore(await env.ASSETS.fetch(request));
   }
 
-  let site1Res;
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-    site1Res = await fetch(config.site1Url, { signal: controller.signal, redirect: "follow" });
-    clearTimeout(timeout);
-  } catch {
-    site1Res = null;
-  }
-
-  if (!site1Res || !site1Res.ok) {
+  const site1 = await fetchSite1(config.site1Url, env);
+  if (!site1) {
     return noStore(await env.ASSETS.fetch(request));
   }
 
-  const contentType = site1Res.headers.get("content-type") || "";
-  if (!contentType.includes("text/html")) {
-    return noStore(new Response(site1Res.body, { status: site1Res.status, headers: { "content-type": contentType } }));
+  if (!site1.isHtml) {
+    return noStore(new Response(site1.body, { status: site1.status, headers: { "content-type": site1.contentType } }));
   }
 
   // OGP title/image come from site2 (the front/overlay site), not site1.
@@ -303,7 +355,7 @@ async function serveOverlayPage(request, env) {
   }
   const ogpTitle = ogp2 && ogp2.title;
 
-  const { headFragment, bodyFragment } = buildInjection(config, site1Res.url, ogpTitle, ogpImage);
+  const { headFragment, bodyFragment } = buildInjection(config, site1.finalUrl, ogpTitle, ogpImage);
 
   const rewritten = new HTMLRewriter()
     .on("head", {
@@ -336,7 +388,7 @@ async function serveOverlayPage(request, env) {
         if (ogpImage) el.setAttribute("content", ogpImage);
       },
     })
-    .transform(site1Res);
+    .transform(site1.htmlResponse);
 
   return noStore(
     new Response(rewritten.body, {
