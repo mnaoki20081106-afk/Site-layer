@@ -1,49 +1,49 @@
 # Site-layer
 
-サイト①とサイト②を重ねて表示するオーバーレイページと、両サイトのURL・重ね方を管理する管理画面を、Cloudflare Pages + Functions + KV で提供します。
+サイト①とサイト②を重ねて表示するオーバーレイページと、両サイトのURL・重ね方を管理する管理画面を、Cloudflare Workers（Static Assets）+ KV で提供します。
 
 ## 構成
 
 - `public/index.html` — 公開ページ。サイト①を背面に、サイト②を前面に重ねて表示します。位置・サイズ・不透明度・クリック対象は管理画面から制御できます。
 - `public/admin.html` — 管理画面。サイト①・サイト②のURLと、サイト②の重ね方（位置/サイズ/不透明度/クリック対象）を設定します。
-- `functions/api/config.js` — Cloudflare Pages Functions。設定の取得（GET）・更新（POST、要トークン認証）を行い、Cloudflare KV に保存します。
-- `wrangler.toml` — Cloudflare Pages プロジェクトの設定（KV バインディング）。
+- `src/index.js` — Cloudflare Worker本体。`/api/config` の GET（設定取得）・POST（設定更新、要トークン認証）を処理し、Cloudflare KV に保存します。それ以外のパスは `public/` 配下の静的ファイルをそのまま返します（Workers Static Assets）。
+- `wrangler.toml` — Worker名、エントリポイント（`src/index.js`）、静的アセットのディレクトリ（`public`）、KVバインディングを設定。
 
-## デプロイ手順（Cloudflare）
+## デプロイ手順（Cloudflareダッシュボード、ブラウザのみでOK）
+
+このプロジェクトは Cloudflare の「Workers Builds」（GitHub連携で自動デプロイされるWorkers）を前提にしています。すでにダッシュボードでリポジトリを接続済みなら、mainブランチへのpush（このPRのマージなど）で自動的に再デプロイされます。
 
 1. **KVネームスペースを作成**
 
-   ```sh
-   npx wrangler kv namespace create CONFIG_KV
-   npx wrangler kv namespace create CONFIG_KV --preview
-   ```
+   ダッシュボード「Workers & Pages」→ 上部タブ「KV」→「Create a namespace」→ 名前を `CONFIG_KV` として作成し、表示された namespace ID を控えます。
 
-   出力された `id` / `preview_id` を `wrangler.toml` の該当箇所に貼り付けます。
+   `wrangler.toml` の `id = "REPLACE_WITH_KV_NAMESPACE_ID"` をそのIDに書き換えてコミットしてください（`preview_id` も同じIDで構いません）。
 
-2. **管理者トークンを設定**
+2. **KVをWorkerにバインド**
 
-   `ADMIN_TOKEN` という名前で、管理画面のPOST認証に使うシークレットを設定します（好きな長いランダム文字列）。
+   対象のWorkerプロジェクトを開く →「Settings」→「Bindings」→「Add binding」→ KV namespace を選択
+   - Variable name: `CONFIG_KV`
+   - KV namespace: 手順1で作成したもの
 
-   ```sh
-   npx wrangler pages secret put ADMIN_TOKEN --project-name site-layer
-   ```
+3. **管理者トークンを設定**
 
-3. **デプロイ**
+   同じく「Settings」→「Variables and Secrets」→「Add」
+   - Variable name: `ADMIN_TOKEN`
+   - Value: 好きな長いランダム文字列（後で管理画面のログインに使うので必ずメモ）
+   - Type: Secret（暗号化）
 
-   ```sh
-   npx wrangler pages deploy public --project-name site-layer
-   ```
+4. **再デプロイ**
 
-   （初回は Cloudflare にプロジェクトを新規作成するか聞かれます）
+   バインディングやシークレットの追加後は、mainブランチに新しいコミットをpushして新規デプロイを発生させてください（Cloudflareの「Retry deployment」は最初の接続時ビルドには使えないため）。
 
-4. デプロイ後に発行されるURLで、以下にアクセスできます。
+5. デプロイ後に発行されるURL（例: `https://site-layer.<subdomain>.workers.dev`、または独自ドメイン設定時はそのドメイン）で、以下にアクセスできます。
 
-   - `https://<project>.pages.dev/index.html` — オーバーレイ表示ページ（公開用）
-   - `https://<project>.pages.dev/admin.html` — 管理画面（URLを知っている人のみがアクセスする想定。必要であれば Cloudflare Access 等でさらにアクセス制限してください）
+   - `/index.html` — オーバーレイ表示ページ（公開用）
+   - `/admin.html` — 管理画面（URLを知っている人のみがアクセスする想定。必要であれば Cloudflare Access 等でさらにアクセス制限してください）
 
 ## 使い方
 
-1. `admin.html` を開き、上部の「管理者トークン」欄に手順2で設定した `ADMIN_TOKEN` を入力します。
+1. `admin.html` を開き、上部の「管理者トークン」欄に手順3で設定した `ADMIN_TOKEN` を入力します。
 2. サイト①・サイト②のURLを入力します。
 3. サイト②をどの位置・サイズで重ねるか（%指定）、不透明度、クリック操作をどちらのサイトに渡すかを設定します。
 4. 「保存」を押すと即座に `index.html` に反映されます。
@@ -55,4 +55,5 @@
 
 ## トラブルシューティング
 
-- KV バインディングや `ADMIN_TOKEN` を後から追加した場合、Cloudflare Pages ダッシュボードの「Retry deployment」は使えません（リポジトリ接続時の最初のビルドは `Cannot retry a build that was created with a seed_repo override` エラーになります）。設定変更後は、`main` ブランチに新しいコミットを push して新規デプロイ（Trigger: Push）を発生させてください。
+- ビルドログに `Executing user deploy command: npx wrangler deploy` と表示され `Could not detect a directory containing static files` で失敗する場合、プロジェクトが Pages ではなく Workers Builds として作成されています。その場合は `wrangler.toml` を Pages用（`pages_build_output_dir`）ではなく、Workers Static Assets用（`main` + `[assets]`）の形式にする必要があります（このリポジトリは対応済み）。
+- KV バインディングや `ADMIN_TOKEN` を後から追加した場合、「Retry deployment」は使えません（`Cannot retry a build that was created with a seed_repo override` エラーになります）。設定変更後は、`main` ブランチに新しいコミットを push して新規デプロイ（Trigger: Push）を発生させてください。

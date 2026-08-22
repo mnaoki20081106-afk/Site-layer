@@ -1,11 +1,15 @@
 name = "site-layer"
+main = "src/index.js"
 compatibility_date = "2024-09-01"
-pages_build_output_dir = "public"
+
+[assets]
+directory = "public"
+binding = "ASSETS"
 
 # KV namespace used to store the overlay configuration (site1Url, site2Url, overlay rect).
-# Create it with:
-#   wrangler kv namespace create CONFIG_KV
-# then paste the returned id below, and repeat with --preview for preview_id.
+# Create it in the Cloudflare dashboard (Workers & Pages > KV > Create a namespace)
+# or with: wrangler kv namespace create CONFIG_KV
+# then paste the returned id below.
 [[kv_namespaces]]
 binding = "CONFIG_KV"
 id = "REPLACE_WITH_KV_NAMESPACE_ID"
