@@ -61,3 +61,4 @@
 
 - ビルドログに `Executing user deploy command: npx wrangler deploy` と表示され `Could not detect a directory containing static files` で失敗する場合、プロジェクトが Pages ではなく Workers Builds として作成されています。その場合は `wrangler.toml` を Pages用（`pages_build_output_dir`）ではなく、Workers Static Assets用（`main` + `[assets]`）の形式にする必要があります（このリポジトリは対応済み）。
 - KV バインディングや `ADMIN_TOKEN` を後から追加した場合、「Retry deployment」は使えません（`Cannot retry a build that was created with a seed_repo override` エラーになります）。設定変更後は、`main` ブランチに新しいコミットを push して新規デプロイ（Trigger: Push）を発生させてください。
+- `ADMIN_TOKEN` をダッシュボードの「Variables and Secrets」に追加しただけでは、既存のデプロイには反映されません。追加後は必ず `main` に新しいコミットを push して再デプロイしてください。
