@@ -13,6 +13,11 @@ const DEFAULT_OVERLAY = {
   // pixel-for-pixel instead of using the top/left/width/height % rect above.
   refSelector: "",
   nativeHeight: 48,
+  // When true (refSelector mode only), a tap on the matched site1 element
+  // opens a fresh copy of site1Url in a new top-level tab instead of
+  // letting the proxied page's own (possibly stale/session-bound) link
+  // navigate in place. See "ディープリンクが開かない場合" in the README.
+  openSite1OnClick: false,
 };
 const DEFAULT_CONFIG = { site1Url: "", site2Url: "", overlay: DEFAULT_OVERLAY };
 
@@ -50,6 +55,7 @@ function sanitizeOverlay(overlay) {
     pointerEvents: o.pointerEvents === "none" ? "none" : "auto",
     refSelector: typeof o.refSelector === "string" ? o.refSelector.trim().slice(0, 300) : "",
     nativeHeight: clampNumber(o.nativeHeight, 1, 4000, DEFAULT_OVERLAY.nativeHeight),
+    openSite1OnClick: o.openSite1OnClick === true,
   };
 }
 
@@ -165,6 +171,29 @@ function buildInjection(config, site1FinalUrl, ogpTitle, ogpImage) {
     }
     refEl.style.position = "relative";
     refEl.style.zIndex = "1500";
+
+    if (o.openSite1OnClick) {
+      // Some sites (notably session/anti-fraud-protected share pages) embed
+      // a signed, session-bound link that was only valid for the request
+      // that fetched this snapshot - not for whoever is tapping now - and
+      // reject it as malformed when used later. Also, custom URL scheme
+      // navigation (app://...) is blocked by mobile browsers when it
+      // doesn't originate from the top-level browsing context, which a
+      // click deep inside a proxied/fetched page never truly is. Opening a
+      // fresh top-level tab makes the real browser issue a brand new,
+      // correctly-session-bound request, and lets that tab's own top-level
+      // context handle any app handoff - this page (and the overlay) is
+      // left untouched in the background.
+      refEl.addEventListener(
+        "click",
+        function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          window.open(${scriptSafeJson(config.site1Url)}, "_blank", "noopener");
+        },
+        true
+      );
+    }
 
     wrap.style.pointerEvents = "auto";
     iframe.style.position = "absolute";
