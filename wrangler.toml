@@ -8,7 +8,9 @@ binding = "ASSETS"
 # Without this, requests matching a static file (e.g. /admin.html) are served
 # directly from the assets layer and never reach the Worker's fetch handler,
 # so the ADMIN_TOKEN injection and OGP rewriting below would never run.
-run_worker_first = ["/", "/index.html", "/admin.html"]
+# (Using the boolean form here, since the path-array form did not appear to
+# take effect in production.)
+run_worker_first = true
 
 # KV namespace used to store the overlay configuration (site1Url, site2Url, overlay rect).
 # Create it in the Cloudflare dashboard (Workers & Pages > KV > Create a namespace)
