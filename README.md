@@ -6,7 +6,7 @@
 
 - `public/index.html` — 公開ページ。サイト①を背面に、サイト②を前面に重ねて表示します。位置・サイズ・不透明度・クリック対象は管理画面から制御できます。
 - `public/admin.html` — 管理画面。サイト①・サイト②のURLと、サイト②の重ね方（位置/サイズ/不透明度/クリック対象）を設定します。
-- `src/index.js` — Cloudflare Worker本体。`/api/config` の GET（設定取得）・POST（設定更新、要トークン認証）を処理し、Cloudflare KV に保存します。それ以外のパスは `public/` 配下の静的ファイルをそのまま返します（Workers Static Assets）。
+- `src/index.js` — Cloudflare Worker本体。`/api/config` の GET（設定取得）・POST（設定更新、要トークン認証）を処理し、Cloudflare KV に保存します。`/` と `/index.html` はサイト①のOGPタイトル・画像を取得して埋め込んだ上で返します。それ以外のパスは `public/` 配下の静的ファイルをそのまま返します（Workers Static Assets）。
 - `wrangler.toml` — Worker名、エントリポイント（`src/index.js`）、静的アセットのディレクトリ（`public`）、KVバインディングを設定。
 
 ## デプロイ手順（Cloudflareダッシュボード、ブラウザのみでOK）
@@ -47,6 +47,10 @@
 2. サイト①・サイト②のURLを入力します。
 3. サイト②をどの位置・サイズで重ねるか（%指定）、不透明度、クリック操作をどちらのサイトに渡すかを設定します。
 4. 「保存」を押すと即座に `index.html` に反映されます。
+
+## OGP（SNSでシェアしたときの見た目）
+
+`/`・`/index.html` へのアクセス時、Workerがサイト①のページを取得して `og:title` / `og:image`（無ければ `twitter:title` / `twitter:image`）を読み取り、このサイト自身のタイトル・OGP画像として埋め込みます。管理画面でサイト①のURLを変更すると、そのタイミングのタイムスタンプを画像URLに付与（`?_v=...`）するので、LINEやX（Twitter）などがOGP画像を古いまま(キャッシュ)表示し続けることを防げます。サイト①側が `og:title` / `og:image` を持たない場合は、このサイトのデフォルトのタイトルのみが使われます。
 
 ## 注意事項
 
