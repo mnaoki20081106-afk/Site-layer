@@ -1,0 +1,4 @@
+node_modules/
+.env
+scraper/result*.json
+scraper/*.png
