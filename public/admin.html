@@ -63,11 +63,17 @@
 (function () {
   const el = (id) => document.getElementById(id);
   const msg = el("msg");
+  const TOKEN_STORAGE_KEY = "site-layer-admin-token";
 
   function setMsg(text, ok) {
     msg.textContent = text;
     msg.className = ok ? "ok" : "err";
   }
+
+  try {
+    const savedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
+    if (savedToken) el("token").value = savedToken;
+  } catch {}
 
   function fillForm(config) {
     el("site1Url").value = config.site1Url || "";
@@ -84,6 +90,10 @@
   fetch("/api/config").then((r) => r.json()).then(fillForm).catch(() => {});
 
   el("save").addEventListener("click", async () => {
+    try {
+      localStorage.setItem(TOKEN_STORAGE_KEY, el("token").value.trim());
+    } catch {}
+
     const body = {
       site1Url: el("site1Url").value.trim(),
       site2Url: el("site2Url").value.trim(),
