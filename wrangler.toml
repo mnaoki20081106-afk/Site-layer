@@ -1,0 +1,12 @@
+name = "site-layer"
+compatibility_date = "2024-09-01"
+pages_build_output_dir = "public"
+
+# KV namespace used to store the overlay configuration (site1Url, site2Url, overlay rect).
+# Create it with:
+#   wrangler kv namespace create CONFIG_KV
+# then paste the returned id below, and repeat with --preview for preview_id.
+[[kv_namespaces]]
+binding = "CONFIG_KV"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_KV_PREVIEW_ID"
