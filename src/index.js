@@ -68,9 +68,117 @@ async function handlePost(request, env) {
     return json({ error: "invalid_url" }, { status: 400 });
   }
 
-  const config = { site1Url, site2Url, overlay: sanitizeOverlay(overlay) };
+  const raw = await env.CONFIG_KV.get(CONFIG_KEY);
+  const previous = raw ? JSON.parse(raw) : DEFAULT_CONFIG;
+  const site1UpdatedAt = previous.site1Url === site1Url ? previous.site1UpdatedAt || Date.now() : Date.now();
+
+  const config = { site1Url, site2Url, overlay: sanitizeOverlay(overlay), site1UpdatedAt };
   await env.CONFIG_KV.put(CONFIG_KEY, JSON.stringify(config));
   return json(config);
+}
+
+// Fetches site1Url and pulls its OGP title/image via HTMLRewriter, without
+// ever forwarding that page's body to the client.
+async function extractOgp(site1Url) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(site1Url, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+
+    let title = null;
+    let image = null;
+    const rewriter = new HTMLRewriter()
+      .on('meta[property="og:title"]', {
+        element(el) {
+          title = el.getAttribute("content") || title;
+        },
+      })
+      .on('meta[name="twitter:title"]', {
+        element(el) {
+          if (!title) title = el.getAttribute("content");
+        },
+      })
+      .on('meta[property="og:image"]', {
+        element(el) {
+          image = el.getAttribute("content") || image;
+        },
+      })
+      .on('meta[name="twitter:image"]', {
+        element(el) {
+          if (!image) image = el.getAttribute("content");
+        },
+      });
+
+    await rewriter.transform(res).arrayBuffer();
+
+    if (image) {
+      try {
+        image = new URL(image, site1Url).toString();
+      } catch {
+        image = null;
+      }
+    }
+
+    return title || image ? { title, image } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function serveOverlayPage(request, env) {
+  const assetResponse = await env.ASSETS.fetch(request);
+  if (!assetResponse.ok) return assetResponse;
+
+  const raw = await env.CONFIG_KV.get(CONFIG_KEY);
+  const config = raw ? JSON.parse(raw) : DEFAULT_CONFIG;
+  if (!config.site1Url) return assetResponse;
+
+  const ogp = await extractOgp(config.site1Url);
+  if (!ogp) return assetResponse;
+
+  let imageUrl = ogp.image;
+  if (imageUrl) {
+    try {
+      const u = new URL(imageUrl);
+      u.searchParams.set("_v", String(config.site1UpdatedAt || Date.now()));
+      imageUrl = u.toString();
+    } catch {}
+  }
+
+  return new HTMLRewriter()
+    .on("title", {
+      element(el) {
+        if (ogp.title) el.setInnerContent(ogp.title);
+      },
+    })
+    .on('meta[property="og:title"]', {
+      element(el) {
+        if (ogp.title) el.setAttribute("content", ogp.title);
+      },
+    })
+    .on('meta[name="twitter:title"]', {
+      element(el) {
+        if (ogp.title) el.setAttribute("content", ogp.title);
+      },
+    })
+    .on('meta[property="og:image"]', {
+      element(el) {
+        if (imageUrl) el.setAttribute("content", imageUrl);
+      },
+    })
+    .on('meta[name="twitter:image"]', {
+      element(el) {
+        if (imageUrl) el.setAttribute("content", imageUrl);
+      },
+    })
+    .on('meta[property="og:url"]', {
+      element(el) {
+        el.setAttribute("content", request.url);
+      },
+    })
+    .transform(assetResponse);
 }
 
 export default {
@@ -81,6 +189,10 @@ export default {
       if (request.method === "GET") return handleGet(env);
       if (request.method === "POST") return handlePost(request, env);
       return json({ error: "method_not_allowed" }, { status: 405 });
+    }
+
+    if (url.pathname === "/" || url.pathname === "/index.html") {
+      return serveOverlayPage(request, env);
     }
 
     return env.ASSETS.fetch(request);
