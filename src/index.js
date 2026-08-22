@@ -77,16 +77,25 @@ async function handlePost(request, env) {
   return json(config);
 }
 
+// Dynamic pages (admin.html, index.html) must never be cached at Cloudflare's
+// edge or in the browser: they're rewritten per-request from live KV config
+// and remote OGP data, so a cached copy would keep showing stale content.
+function noStore(response) {
+  const copy = new Response(response.body, response);
+  copy.headers.set("Cache-Control", "no-store");
+  return copy;
+}
+
 async function serveAdminPage(request, env) {
   const assetResponse = await env.ASSETS.fetch(request);
-  if (!env.ADMIN_TOKEN || !assetResponse.ok) return assetResponse;
+  if (!env.ADMIN_TOKEN || !assetResponse.ok) return noStore(assetResponse);
 
   const html = await assetResponse.text();
   const injected = html.replace(
     "<head>",
     `<head>\n<script>window.__ADMIN_TOKEN__ = ${JSON.stringify(env.ADMIN_TOKEN)};</script>`
   );
-  return new Response(injected, assetResponse);
+  return noStore(new Response(injected, assetResponse));
 }
 
 // Fetches site1Url and pulls its OGP title/image via HTMLRewriter, without
@@ -141,14 +150,14 @@ async function extractOgp(site1Url) {
 
 async function serveOverlayPage(request, env) {
   const assetResponse = await env.ASSETS.fetch(request);
-  if (!assetResponse.ok) return assetResponse;
+  if (!assetResponse.ok) return noStore(assetResponse);
 
   const raw = await env.CONFIG_KV.get(CONFIG_KEY);
   const config = raw ? JSON.parse(raw) : DEFAULT_CONFIG;
-  if (!config.site1Url) return assetResponse;
+  if (!config.site1Url) return noStore(assetResponse);
 
   const ogp = await extractOgp(config.site1Url);
-  if (!ogp) return assetResponse;
+  if (!ogp) return noStore(assetResponse);
 
   let imageUrl = ogp.image;
   if (imageUrl) {
@@ -159,7 +168,7 @@ async function serveOverlayPage(request, env) {
     } catch {}
   }
 
-  return new HTMLRewriter()
+  const rewritten = new HTMLRewriter()
     .on("title", {
       element(el) {
         if (ogp.title) el.setInnerContent(ogp.title);
@@ -191,6 +200,8 @@ async function serveOverlayPage(request, env) {
       },
     })
     .transform(assetResponse);
+
+  return noStore(rewritten);
 }
 
 export default {
