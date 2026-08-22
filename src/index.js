@@ -131,9 +131,6 @@ function buildInjection(config, site1FinalUrl, ogpTitle, ogpImage) {
   const headFragment = ogpTags;
   const bodyFragment = `
 <div id="ov-site2-wrap" style="position:fixed;overflow:hidden;z-index:2147483000;"></div>
-<a id="ov-open-site1" href="${escapeHtmlAttr(config.site1Url)}" target="_blank" rel="noopener"
-   style="position:fixed;right:8px;bottom:8px;z-index:2147483001;font:12px/1 system-ui,sans-serif;
-          color:#fff;background:rgba(0,0,0,.55);padding:6px 10px;border-radius:999px;text-decoration:none;">元のサイトを開く</a>
 <script>
 (function () {
   var wrap = document.getElementById("ov-site2-wrap");
