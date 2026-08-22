@@ -7,7 +7,13 @@
 // to the public/ static assets.
 
 const CONFIG_KEY = "site-config";
-const DEFAULT_OVERLAY = { top: 0, left: 0, width: 100, height: 100, opacity: 1, pointerEvents: "auto" };
+const DEFAULT_OVERLAY = {
+  top: 0, left: 0, width: 100, height: 100, opacity: 1, pointerEvents: "auto",
+  // When refSelector is set, site2 tracks that element inside site1's DOM
+  // pixel-for-pixel instead of using the top/left/width/height % rect above.
+  refSelector: "",
+  nativeHeight: 48,
+};
 const DEFAULT_CONFIG = { site1Url: "", site2Url: "", overlay: DEFAULT_OVERLAY };
 
 function json(data, init) {
@@ -42,6 +48,8 @@ function sanitizeOverlay(overlay) {
     height: clampNumber(o.height, 1, 100, DEFAULT_OVERLAY.height),
     opacity: clampNumber(o.opacity, 0, 1, DEFAULT_OVERLAY.opacity),
     pointerEvents: o.pointerEvents === "none" ? "none" : "auto",
+    refSelector: typeof o.refSelector === "string" ? o.refSelector.trim().slice(0, 300) : "",
+    nativeHeight: clampNumber(o.nativeHeight, 1, 4000, DEFAULT_OVERLAY.nativeHeight),
   };
 }
 
@@ -113,11 +121,12 @@ function escapeHtmlAttr(value) {
 }
 
 // Builds the <head> fragment (base tag + OGP tags sourced from site2) and
-// <body> fragment (site2 overlay + escape link) injected into site1's own
-// proxied page. Injecting fresh OGP tags - rather than only rewriting
-// site1's existing ones - guarantees they're present even when site1's page
-// declares none of its own, and wins over any of site1's own og:*/<title>
-// tags appearing later in <head> (browsers/crawlers use the first one).
+// <body> fragment (site2 overlay iframe + positioning script) injected into
+// site1's own proxied page. Injecting fresh OGP tags - rather than only
+// rewriting site1's existing ones - guarantees they're present even when
+// site1's page declares none of its own, and wins over any of site1's own
+// og:*/<title> tags appearing later in <head> (browsers/crawlers use the
+// first one).
 function buildInjection(config, site1FinalUrl, ogpTitle, ogpImage) {
   const overlay = config.overlay || DEFAULT_OVERLAY;
   const ogpTags = [
@@ -135,18 +144,65 @@ function buildInjection(config, site1FinalUrl, ogpTitle, ogpImage) {
 (function () {
   var wrap = document.getElementById("ov-site2-wrap");
   var o = ${scriptSafeJson(overlay)};
-  wrap.style.top = o.top + "%";
-  wrap.style.left = o.left + "%";
-  wrap.style.width = o.width + "%";
-  wrap.style.height = o.height + "%";
-  wrap.style.opacity = String(o.opacity);
-  wrap.style.pointerEvents = o.pointerEvents === "none" ? "none" : "auto";
+  var site2Url = ${scriptSafeJson(config.site2Url)};
 
   var iframe = document.createElement("iframe");
-  iframe.src = ${scriptSafeJson(config.site2Url)};
+  iframe.id = "ov-site2-iframe";
+  iframe.src = site2Url;
   iframe.title = "site2";
-  iframe.style.cssText = "border:none;display:block;width:100%;height:100%;";
-  wrap.appendChild(iframe);
+  iframe.scrolling = "no";
+  iframe.style.border = "none";
+  iframe.style.display = "block";
+
+  if (o.refSelector) {
+    // Pixel-perfect tracking mode: site2 is scaled/positioned to exactly
+    // cover a specific element inside site1's own page, and follows it on
+    // resize/scroll (same technique as a manually hand-placed overlay).
+    var refEl = document.querySelector(o.refSelector);
+    if (!refEl) {
+      console.warn("[site-layer] refSelector matched no element:", o.refSelector);
+      return;
+    }
+    refEl.style.position = "relative";
+    refEl.style.zIndex = "1500";
+
+    wrap.style.pointerEvents = "auto";
+    iframe.style.position = "absolute";
+    iframe.style.top = "0";
+    iframe.style.left = "0";
+    iframe.style.transformOrigin = "top left";
+    wrap.appendChild(iframe);
+
+    function sync() {
+      var rect = refEl.getBoundingClientRect();
+      wrap.style.top = rect.top + "px";
+      wrap.style.left = rect.left + "px";
+      wrap.style.width = rect.width + "px";
+      wrap.style.height = rect.height + "px";
+
+      var scale = rect.height / o.nativeHeight;
+      iframe.style.width = (rect.width / scale) + "px";
+      iframe.style.height = o.nativeHeight + "px";
+      iframe.style.transform = "scale(" + scale + ")";
+    }
+
+    new ResizeObserver(sync).observe(refEl);
+    window.addEventListener("load", sync);
+    window.addEventListener("resize", sync);
+    window.addEventListener("scroll", sync, { passive: true, capture: true });
+    sync();
+  } else {
+    // Percentage-of-viewport mode.
+    wrap.style.top = o.top + "%";
+    wrap.style.left = o.left + "%";
+    wrap.style.width = o.width + "%";
+    wrap.style.height = o.height + "%";
+    wrap.style.opacity = String(o.opacity);
+    wrap.style.pointerEvents = o.pointerEvents === "none" ? "none" : "auto";
+    iframe.style.width = "100%";
+    iframe.style.height = "100%";
+    wrap.appendChild(iframe);
+  }
 })();
 </script>`;
   return { headFragment, bodyFragment };
