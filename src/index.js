@@ -1,7 +1,10 @@
 // Cloudflare Worker (Static Assets + API) entrypoint.
 //
-// Static files under public/ (index.html, admin.html) are served automatically
-// by the Workers Assets binding. Requests to /api/config are handled here.
+// / and /index.html proxy site1Url as this page's own top-level document
+// (with site2 injected as an overlay iframe) - see serveOverlayPage below.
+// /admin.html is served from public/ with the ADMIN_TOKEN injected.
+// Requests to /api/config are handled here. Everything else falls through
+// to the public/ static assets.
 
 const CONFIG_KEY = "site-config";
 const DEFAULT_OVERLAY = { top: 0, left: 0, width: 100, height: 100, opacity: 1, pointerEvents: "auto" };
@@ -71,31 +74,94 @@ async function handlePost(request, env) {
   const raw = await env.CONFIG_KV.get(CONFIG_KEY);
   const previous = raw ? JSON.parse(raw) : DEFAULT_CONFIG;
   const site1UpdatedAt = previous.site1Url === site1Url ? previous.site1UpdatedAt || Date.now() : Date.now();
+  const site2UpdatedAt = previous.site2Url === site2Url ? previous.site2UpdatedAt || Date.now() : Date.now();
 
-  const config = { site1Url, site2Url, overlay: sanitizeOverlay(overlay), site1UpdatedAt };
+  const config = { site1Url, site2Url, overlay: sanitizeOverlay(overlay), site1UpdatedAt, site2UpdatedAt };
   await env.CONFIG_KV.put(CONFIG_KEY, JSON.stringify(config));
   return json(config);
 }
 
+// Dynamic pages (admin.html, index.html) must never be cached at Cloudflare's
+// edge or in the browser: they're rewritten per-request from live KV config
+// and remote OGP data, so a cached copy would keep showing stale content.
+function noStore(response) {
+  const copy = new Response(response.body, response);
+  copy.headers.set("Cache-Control", "no-store");
+  return copy;
+}
+
 async function serveAdminPage(request, env) {
   const assetResponse = await env.ASSETS.fetch(request);
-  if (!env.ADMIN_TOKEN || !assetResponse.ok) return assetResponse;
+  if (!env.ADMIN_TOKEN || !assetResponse.ok) return noStore(assetResponse);
 
   const html = await assetResponse.text();
   const injected = html.replace(
     "<head>",
     `<head>\n<script>window.__ADMIN_TOKEN__ = ${JSON.stringify(env.ADMIN_TOKEN)};</script>`
   );
-  return new Response(injected, assetResponse);
+  return noStore(new Response(injected, assetResponse));
 }
 
-// Fetches site1Url and pulls its OGP title/image via HTMLRewriter, without
-// ever forwarding that page's body to the client.
-async function extractOgp(site1Url) {
+// Embeds a value into an inline <script> as JSON, escaping "<" so the
+// browser can never see it as closing the surrounding <script> tag.
+function scriptSafeJson(value) {
+  return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+
+function escapeHtmlAttr(value) {
+  return String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Builds the <head> fragment (base tag + OGP tags sourced from site2) and
+// <body> fragment (site2 overlay + escape link) injected into site1's own
+// proxied page. Injecting fresh OGP tags - rather than only rewriting
+// site1's existing ones - guarantees they're present even when site1's page
+// declares none of its own, and wins over any of site1's own og:*/<title>
+// tags appearing later in <head> (browsers/crawlers use the first one).
+function buildInjection(config, site1FinalUrl, ogpTitle, ogpImage) {
+  const overlay = config.overlay || DEFAULT_OVERLAY;
+  const ogpTags = [
+    `<base href="${escapeHtmlAttr(site1FinalUrl)}">`,
+    ogpTitle ? `<title>${escapeHtmlAttr(ogpTitle)}</title>` : "",
+    ogpTitle ? `<meta property="og:title" content="${escapeHtmlAttr(ogpTitle)}">` : "",
+    ogpTitle ? `<meta name="twitter:title" content="${escapeHtmlAttr(ogpTitle)}">` : "",
+    ogpImage ? `<meta property="og:image" content="${escapeHtmlAttr(ogpImage)}">` : "",
+    ogpImage ? `<meta name="twitter:image" content="${escapeHtmlAttr(ogpImage)}">` : "",
+  ].join("\n");
+  const headFragment = ogpTags;
+  const bodyFragment = `
+<div id="ov-site2-wrap" style="position:fixed;overflow:hidden;z-index:2147483000;"></div>
+<a id="ov-open-site1" href="${escapeHtmlAttr(config.site1Url)}" target="_blank" rel="noopener"
+   style="position:fixed;right:8px;bottom:8px;z-index:2147483001;font:12px/1 system-ui,sans-serif;
+          color:#fff;background:rgba(0,0,0,.55);padding:6px 10px;border-radius:999px;text-decoration:none;">元のサイトを開く</a>
+<script>
+(function () {
+  var wrap = document.getElementById("ov-site2-wrap");
+  var o = ${scriptSafeJson(overlay)};
+  wrap.style.top = o.top + "%";
+  wrap.style.left = o.left + "%";
+  wrap.style.width = o.width + "%";
+  wrap.style.height = o.height + "%";
+  wrap.style.opacity = String(o.opacity);
+  wrap.style.pointerEvents = o.pointerEvents === "none" ? "none" : "auto";
+
+  var iframe = document.createElement("iframe");
+  iframe.src = ${scriptSafeJson(config.site2Url)};
+  iframe.title = "site2";
+  iframe.style.cssText = "border:none;display:block;width:100%;height:100%;";
+  wrap.appendChild(iframe);
+})();
+</script>`;
+  return { headFragment, bodyFragment };
+}
+
+// Fetches url and pulls its OGP title/image via HTMLRewriter, without ever
+// forwarding that page's body to the client.
+async function extractOgp(url) {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
-    const res = await fetch(site1Url, { signal: controller.signal });
+    const res = await fetch(url, { signal: controller.signal });
     clearTimeout(timeout);
     if (!res.ok) return null;
 
@@ -127,7 +193,7 @@ async function extractOgp(site1Url) {
 
     if (image) {
       try {
-        image = new URL(image, site1Url).toString();
+        image = new URL(image, url).toString();
       } catch {
         image = null;
       }
@@ -139,50 +205,72 @@ async function extractOgp(site1Url) {
   }
 }
 
+// Proxies site1Url as this page's own top-level document (instead of an
+// iframe) so that links inside it - including app deep links / universal
+// links (e.g. opening the YouTube app) - navigate the real top-level
+// browsing context and actually work. site2 is then injected as a small
+// overlay iframe on top, positioned per the admin-configured rect.
 async function serveOverlayPage(request, env) {
-  const assetResponse = await env.ASSETS.fetch(request);
-  if (!assetResponse.ok) return assetResponse;
-
   const raw = await env.CONFIG_KV.get(CONFIG_KEY);
   const config = raw ? JSON.parse(raw) : DEFAULT_CONFIG;
-  if (!config.site1Url) return assetResponse;
 
-  const ogp = await extractOgp(config.site1Url);
-  if (!ogp) return assetResponse;
-
-  let imageUrl = ogp.image;
-  if (imageUrl) {
-    try {
-      const u = new URL(imageUrl);
-      u.searchParams.set("_v", String(config.site1UpdatedAt || Date.now()));
-      imageUrl = u.toString();
-    } catch {}
+  if (!config.site1Url || !config.site2Url) {
+    return noStore(await env.ASSETS.fetch(request));
   }
 
-  return new HTMLRewriter()
+  let site1Res;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    site1Res = await fetch(config.site1Url, { signal: controller.signal, redirect: "follow" });
+    clearTimeout(timeout);
+  } catch {
+    site1Res = null;
+  }
+
+  if (!site1Res || !site1Res.ok) {
+    return noStore(await env.ASSETS.fetch(request));
+  }
+
+  const contentType = site1Res.headers.get("content-type") || "";
+  if (!contentType.includes("text/html")) {
+    return noStore(new Response(site1Res.body, { status: site1Res.status, headers: { "content-type": contentType } }));
+  }
+
+  // OGP title/image come from site2 (the front/overlay site), not site1.
+  const ogp2 = await extractOgp(config.site2Url);
+  const imageBust = String(config.site2UpdatedAt || Date.now());
+  let ogpImage = ogp2 && ogp2.image;
+  if (ogpImage) {
+    try {
+      const abs = new URL(ogpImage);
+      abs.searchParams.set("_v", imageBust);
+      ogpImage = abs.toString();
+    } catch {}
+  }
+  const ogpTitle = ogp2 && ogp2.title;
+
+  const { headFragment, bodyFragment } = buildInjection(config, site1Res.url, ogpTitle, ogpImage);
+
+  const rewritten = new HTMLRewriter()
+    .on("head", {
+      element(el) {
+        el.prepend(headFragment, { html: true });
+      },
+    })
+    .on("body", {
+      element(el) {
+        el.append(bodyFragment, { html: true });
+      },
+    })
     .on("title", {
       element(el) {
-        if (ogp.title) el.setInnerContent(ogp.title);
+        if (ogpTitle) el.setInnerContent(ogpTitle);
       },
     })
-    .on('meta[property="og:title"]', {
+    .on('meta[property="og:title"], meta[name="twitter:title"]', {
       element(el) {
-        if (ogp.title) el.setAttribute("content", ogp.title);
-      },
-    })
-    .on('meta[name="twitter:title"]', {
-      element(el) {
-        if (ogp.title) el.setAttribute("content", ogp.title);
-      },
-    })
-    .on('meta[property="og:image"]', {
-      element(el) {
-        if (imageUrl) el.setAttribute("content", imageUrl);
-      },
-    })
-    .on('meta[name="twitter:image"]', {
-      element(el) {
-        if (imageUrl) el.setAttribute("content", imageUrl);
+        if (ogpTitle) el.setAttribute("content", ogpTitle);
       },
     })
     .on('meta[property="og:url"]', {
@@ -190,7 +278,19 @@ async function serveOverlayPage(request, env) {
         el.setAttribute("content", request.url);
       },
     })
-    .transform(assetResponse);
+    .on('meta[property="og:image"], meta[name="twitter:image"]', {
+      element(el) {
+        if (ogpImage) el.setAttribute("content", ogpImage);
+      },
+    })
+    .transform(site1Res);
+
+  return noStore(
+    new Response(rewritten.body, {
+      status: rewritten.status,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    })
+  );
 }
 
 export default {

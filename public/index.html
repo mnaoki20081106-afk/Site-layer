@@ -4,80 +4,17 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Site Overlay</title>
-<meta property="og:type" content="website" />
-<meta property="og:title" content="Site Overlay" />
-<meta property="og:image" content="" />
-<meta property="og:url" content="" />
-<meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Site Overlay" />
-<meta name="twitter:image" content="" />
 <style>
-  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; }
-  #site1-frame, #site2-frame {
-    position: fixed;
-    border: none;
-    display: block;
-  }
-  #site1-frame {
-    top: 0; left: 0; width: 100%; height: 100%;
-    z-index: 1;
-  }
-  #site2-frame {
-    z-index: 2;
-  }
+  html, body { margin: 0; padding: 0; height: 100%; }
   #status {
     position: fixed; inset: 0;
     display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 0 24px;
     font: 14px/1.4 system-ui, sans-serif; color: #888; background: #000;
-    z-index: 10;
   }
 </style>
 </head>
 <body>
-  <div id="status">読み込み中...</div>
-  <iframe id="site1-frame" title="site1" hidden></iframe>
-  <iframe id="site2-frame" title="site2" hidden></iframe>
-
-  <script>
-  (function () {
-    const DEFAULT_OVERLAY = {
-      top: 0, left: 0, width: 100, height: 100, // % of viewport
-      opacity: 1,
-      pointerEvents: "auto", // "auto" = site2 が操作対象 / "none" = クリックはsite1へ透過
-    };
-
-    const statusEl = document.getElementById("status");
-    const site1 = document.getElementById("site1-frame");
-    const site2 = document.getElementById("site2-frame");
-
-    function applyOverlayRect(overlay) {
-      const o = Object.assign({}, DEFAULT_OVERLAY, overlay || {});
-      site2.style.top = o.top + "%";
-      site2.style.left = o.left + "%";
-      site2.style.width = o.width + "%";
-      site2.style.height = o.height + "%";
-      site2.style.opacity = String(o.opacity);
-      site2.style.pointerEvents = o.pointerEvents === "none" ? "none" : "auto";
-    }
-
-    fetch("/api/config")
-      .then((r) => r.json())
-      .then((config) => {
-        if (!config.site1Url || !config.site2Url) {
-          statusEl.textContent = "URLが未設定です。管理画面 (/admin.html) で設定してください。";
-          return;
-        }
-        site1.src = config.site1Url;
-        site2.src = config.site2Url;
-        applyOverlayRect(config.overlay);
-        site1.hidden = false;
-        site2.hidden = false;
-        statusEl.remove();
-      })
-      .catch(() => {
-        statusEl.textContent = "設定の読み込みに失敗しました。";
-      });
-  })();
-  </script>
+  <div id="status">URLが未設定、またはサイト①への接続に失敗しました。管理画面 (/admin.html) で設定を確認してください。</div>
 </body>
 </html>
