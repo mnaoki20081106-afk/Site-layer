@@ -1,10 +1,7 @@
-// Cloudflare Pages Function: GET/POST /api/config
+// Cloudflare Worker (Static Assets + API) entrypoint.
 //
-// GET  -> { site1Url, site2Url } (public, read-only)
-// POST -> updates the URLs. Requires header: Authorization: Bearer <ADMIN_TOKEN>
-//
-// Requires a KV namespace bound as CONFIG_KV and a secret ADMIN_TOKEN,
-// both configured in the Cloudflare Pages project settings (see README.md).
+// Static files under public/ (index.html, admin.html) are served automatically
+// by the Workers Assets binding. Requests to /api/config are handled here.
 
 const CONFIG_KEY = "site-config";
 const DEFAULT_OVERLAY = { top: 0, left: 0, width: 100, height: 100, opacity: 1, pointerEvents: "auto" };
@@ -45,13 +42,13 @@ function sanitizeOverlay(overlay) {
   };
 }
 
-export async function onRequestGet({ env }) {
+async function handleGet(env) {
   const raw = await env.CONFIG_KV.get(CONFIG_KEY);
   const config = raw ? JSON.parse(raw) : DEFAULT_CONFIG;
   return json(config);
 }
 
-export async function onRequestPost({ request, env }) {
+async function handlePost(request, env) {
   const auth = request.headers.get("authorization") || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
 
@@ -75,3 +72,17 @@ export async function onRequestPost({ request, env }) {
   await env.CONFIG_KV.put(CONFIG_KEY, JSON.stringify(config));
   return json(config);
 }
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/api/config") {
+      if (request.method === "GET") return handleGet(env);
+      if (request.method === "POST") return handlePost(request, env);
+      return json({ error: "method_not_allowed" }, { status: 405 });
+    }
+
+    return env.ASSETS.fetch(request);
+  },
+};
