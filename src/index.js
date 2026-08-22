@@ -74,8 +74,9 @@ async function handlePost(request, env) {
   const raw = await env.CONFIG_KV.get(CONFIG_KEY);
   const previous = raw ? JSON.parse(raw) : DEFAULT_CONFIG;
   const site1UpdatedAt = previous.site1Url === site1Url ? previous.site1UpdatedAt || Date.now() : Date.now();
+  const site2UpdatedAt = previous.site2Url === site2Url ? previous.site2UpdatedAt || Date.now() : Date.now();
 
-  const config = { site1Url, site2Url, overlay: sanitizeOverlay(overlay), site1UpdatedAt };
+  const config = { site1Url, site2Url, overlay: sanitizeOverlay(overlay), site1UpdatedAt, site2UpdatedAt };
   await env.CONFIG_KV.put(CONFIG_KEY, JSON.stringify(config));
   return json(config);
 }
@@ -111,11 +112,23 @@ function escapeHtmlAttr(value) {
   return String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-// Builds the <head> fragment (base tag) and <body> fragment (site2 overlay +
-// escape link) injected into site1's own proxied page.
-function buildInjection(config, site1FinalUrl) {
+// Builds the <head> fragment (base tag + OGP tags sourced from site2) and
+// <body> fragment (site2 overlay + escape link) injected into site1's own
+// proxied page. Injecting fresh OGP tags - rather than only rewriting
+// site1's existing ones - guarantees they're present even when site1's page
+// declares none of its own, and wins over any of site1's own og:*/<title>
+// tags appearing later in <head> (browsers/crawlers use the first one).
+function buildInjection(config, site1FinalUrl, ogpTitle, ogpImage) {
   const overlay = config.overlay || DEFAULT_OVERLAY;
-  const headFragment = `<base href="${escapeHtmlAttr(site1FinalUrl)}">`;
+  const ogpTags = [
+    `<base href="${escapeHtmlAttr(site1FinalUrl)}">`,
+    ogpTitle ? `<title>${escapeHtmlAttr(ogpTitle)}</title>` : "",
+    ogpTitle ? `<meta property="og:title" content="${escapeHtmlAttr(ogpTitle)}">` : "",
+    ogpTitle ? `<meta name="twitter:title" content="${escapeHtmlAttr(ogpTitle)}">` : "",
+    ogpImage ? `<meta property="og:image" content="${escapeHtmlAttr(ogpImage)}">` : "",
+    ogpImage ? `<meta name="twitter:image" content="${escapeHtmlAttr(ogpImage)}">` : "",
+  ].join("\n");
+  const headFragment = ogpTags;
   const bodyFragment = `
 <div id="ov-site2-wrap" style="position:fixed;overflow:hidden;z-index:2147483000;"></div>
 <a id="ov-open-site1" href="${escapeHtmlAttr(config.site1Url)}" target="_blank" rel="noopener"
@@ -140,6 +153,56 @@ function buildInjection(config, site1FinalUrl) {
 })();
 </script>`;
   return { headFragment, bodyFragment };
+}
+
+// Fetches url and pulls its OGP title/image via HTMLRewriter, without ever
+// forwarding that page's body to the client.
+async function extractOgp(url) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+
+    let title = null;
+    let image = null;
+    const rewriter = new HTMLRewriter()
+      .on('meta[property="og:title"]', {
+        element(el) {
+          title = el.getAttribute("content") || title;
+        },
+      })
+      .on('meta[name="twitter:title"]', {
+        element(el) {
+          if (!title) title = el.getAttribute("content");
+        },
+      })
+      .on('meta[property="og:image"]', {
+        element(el) {
+          image = el.getAttribute("content") || image;
+        },
+      })
+      .on('meta[name="twitter:image"]', {
+        element(el) {
+          if (!image) image = el.getAttribute("content");
+        },
+      });
+
+    await rewriter.transform(res).arrayBuffer();
+
+    if (image) {
+      try {
+        image = new URL(image, url).toString();
+      } catch {
+        image = null;
+      }
+    }
+
+    return title || image ? { title, image } : null;
+  } catch {
+    return null;
+  }
 }
 
 // Proxies site1Url as this page's own top-level document (instead of an
@@ -174,8 +237,20 @@ async function serveOverlayPage(request, env) {
     return noStore(new Response(site1Res.body, { status: site1Res.status, headers: { "content-type": contentType } }));
   }
 
-  const { headFragment, bodyFragment } = buildInjection(config, site1Res.url);
-  const imageBust = String(config.site1UpdatedAt || Date.now());
+  // OGP title/image come from site2 (the front/overlay site), not site1.
+  const ogp2 = await extractOgp(config.site2Url);
+  const imageBust = String(config.site2UpdatedAt || Date.now());
+  let ogpImage = ogp2 && ogp2.image;
+  if (ogpImage) {
+    try {
+      const abs = new URL(ogpImage);
+      abs.searchParams.set("_v", imageBust);
+      ogpImage = abs.toString();
+    } catch {}
+  }
+  const ogpTitle = ogp2 && ogp2.title;
+
+  const { headFragment, bodyFragment } = buildInjection(config, site1Res.url, ogpTitle, ogpImage);
 
   const rewritten = new HTMLRewriter()
     .on("head", {
@@ -188,6 +263,16 @@ async function serveOverlayPage(request, env) {
         el.append(bodyFragment, { html: true });
       },
     })
+    .on("title", {
+      element(el) {
+        if (ogpTitle) el.setInnerContent(ogpTitle);
+      },
+    })
+    .on('meta[property="og:title"], meta[name="twitter:title"]', {
+      element(el) {
+        if (ogpTitle) el.setAttribute("content", ogpTitle);
+      },
+    })
     .on('meta[property="og:url"]', {
       element(el) {
         el.setAttribute("content", request.url);
@@ -195,13 +280,7 @@ async function serveOverlayPage(request, env) {
     })
     .on('meta[property="og:image"], meta[name="twitter:image"]', {
       element(el) {
-        const content = el.getAttribute("content");
-        if (!content) return;
-        try {
-          const abs = new URL(content, site1Res.url);
-          abs.searchParams.set("_v", imageBust);
-          el.setAttribute("content", abs.toString());
-        } catch {}
+        if (ogpImage) el.setAttribute("content", ogpImage);
       },
     })
     .transform(site1Res);
