@@ -52,3 +52,7 @@
 
 - サイト①・サイト②側が `X-Frame-Options` や `Content-Security-Policy: frame-ancestors` で iframe 埋め込みを禁止している場合、そのサイトは重ね表示できません（相手サイトの設定に依存します）。
 - 管理画面 (`admin.html`) はURLを知っていれば誰でも開けます。保存操作自体は `ADMIN_TOKEN` がないと失敗しますが、公開したくない場合は Cloudflare Access などでページ自体へのアクセスも制限することを推奨します。
+
+## トラブルシューティング
+
+- KV バインディングや `ADMIN_TOKEN` を後から追加した場合、Cloudflare Pages ダッシュボードの「Retry deployment」は使えません（リポジトリ接続時の最初のビルドは `Cannot retry a build that was created with a seed_repo override` エラーになります）。設定変更後は、`main` ブランチに新しいコミットを push して新規デプロイ（Trigger: Push）を発生させてください。
