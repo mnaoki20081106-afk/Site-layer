@@ -28,8 +28,10 @@
   <h1>Site Overlay 管理画面</h1>
   <p>サイト①・サイト②のURLと重ね方を設定します。設定は即座に <a href="/index.html">オーバーレイページ</a> に反映されます。</p>
 
-  <label for="token">管理者トークン</label>
-  <input type="password" id="token" placeholder="ADMIN_TOKEN" autocomplete="off" />
+  <div id="tokenField">
+    <label for="token">管理者トークン</label>
+    <input type="password" id="token" placeholder="ADMIN_TOKEN" autocomplete="off" />
+  </div>
 
   <label for="site1Url">サイト① URL（背面）</label>
   <input type="url" id="site1Url" placeholder="https://example.com/site1" />
@@ -70,10 +72,15 @@
     msg.className = ok ? "ok" : "err";
   }
 
-  try {
-    const savedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
-    if (savedToken) el("token").value = savedToken;
-  } catch {}
+  if (typeof window.__ADMIN_TOKEN__ === "string" && window.__ADMIN_TOKEN__) {
+    el("token").value = window.__ADMIN_TOKEN__;
+    el("tokenField").style.display = "none";
+  } else {
+    try {
+      const savedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
+      if (savedToken) el("token").value = savedToken;
+    } catch {}
+  }
 
   function fillForm(config) {
     el("site1Url").value = config.site1Url || "";
@@ -90,9 +97,11 @@
   fetch("/api/config").then((r) => r.json()).then(fillForm).catch(() => {});
 
   el("save").addEventListener("click", async () => {
-    try {
-      localStorage.setItem(TOKEN_STORAGE_KEY, el("token").value.trim());
-    } catch {}
+    if (!(typeof window.__ADMIN_TOKEN__ === "string" && window.__ADMIN_TOKEN__)) {
+      try {
+        localStorage.setItem(TOKEN_STORAGE_KEY, el("token").value.trim());
+      } catch {}
+    }
 
     const body = {
       site1Url: el("site1Url").value.trim(),

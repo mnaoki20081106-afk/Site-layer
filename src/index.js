@@ -73,6 +73,18 @@ async function handlePost(request, env) {
   return json(config);
 }
 
+async function serveAdminPage(request, env) {
+  const assetResponse = await env.ASSETS.fetch(request);
+  if (!env.ADMIN_TOKEN || !assetResponse.ok) return assetResponse;
+
+  const html = await assetResponse.text();
+  const injected = html.replace(
+    "<head>",
+    `<head>\n<script>window.__ADMIN_TOKEN__ = ${JSON.stringify(env.ADMIN_TOKEN)};</script>`
+  );
+  return new Response(injected, assetResponse);
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -81,6 +93,10 @@ export default {
       if (request.method === "GET") return handleGet(env);
       if (request.method === "POST") return handlePost(request, env);
       return json({ error: "method_not_allowed" }, { status: 405 });
+    }
+
+    if (url.pathname === "/admin.html") {
+      return serveAdminPage(request, env);
     }
 
     return env.ASSETS.fetch(request);
