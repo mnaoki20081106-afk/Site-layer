@@ -1,0 +1,16 @@
+{
+  "name": "site-layer-render-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "HTTP service that renders a URL through Puppeteer Stealth and returns the resulting HTML, so the Cloudflare Worker (which cannot run a real browser) can fetch site1 without being flagged as bot traffic.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "puppeteer": "^25.8.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  }
+}

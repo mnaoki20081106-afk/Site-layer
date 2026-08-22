@@ -1,9 +1,7 @@
 name: Scrape site1
 
 on:
-  workflow_dispatch: {} # Actionsタブから手動実行できるようにする
-  schedule:
-    - cron: "0 * * * *" # 毎時0分（UTC）に自動実行。頻度は必要に応じて変更してください
+  workflow_dispatch: {} # Actionsタブから手動実行できるようにする（定期実行はしない）
 
 jobs:
   scrape:
