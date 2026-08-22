@@ -208,13 +208,30 @@ function buildInjection(config, site1FinalUrl, ogpTitle, ogpImage) {
   return { headFragment, bodyFragment };
 }
 
+// Headers that make our server-side fetch look like the visitor's real
+// browser instead of Cloudflare's generic Workers fetch client. Sites
+// (especially ones behind bot-management like Akamai) can serve different -
+// sometimes broken - responses, cookies, or redirects to a request that
+// doesn't look like a real browser, which can surface later as odd
+// behavior once the browser itself navigates onward.
+function browserLikeHeaders(request) {
+  const headers = new Headers();
+  const forward = ["user-agent", "accept-language", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"];
+  for (const name of forward) {
+    const value = request.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  headers.set("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
+  return headers;
+}
+
 // Fetches url and pulls its OGP title/image via HTMLRewriter, without ever
 // forwarding that page's body to the client.
-async function extractOgp(url) {
+async function extractOgp(url, requestHeaders) {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
-    const res = await fetch(url, { signal: controller.signal });
+    const res = await fetch(url, { signal: controller.signal, headers: requestHeaders });
     clearTimeout(timeout);
     if (!res.ok) return null;
 
@@ -271,11 +288,13 @@ async function serveOverlayPage(request, env) {
     return noStore(await env.ASSETS.fetch(request));
   }
 
+  const headers = browserLikeHeaders(request);
+
   let site1Res;
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
-    site1Res = await fetch(config.site1Url, { signal: controller.signal, redirect: "follow" });
+    site1Res = await fetch(config.site1Url, { signal: controller.signal, redirect: "follow", headers });
     clearTimeout(timeout);
   } catch {
     site1Res = null;
@@ -291,7 +310,7 @@ async function serveOverlayPage(request, env) {
   }
 
   // OGP title/image come from site2 (the front/overlay site), not site1.
-  const ogp2 = await extractOgp(config.site2Url);
+  const ogp2 = await extractOgp(config.site2Url, headers);
   const imageBust = String(config.site2UpdatedAt || Date.now());
   let ogpImage = ogp2 && ogp2.image;
   if (ogpImage) {
