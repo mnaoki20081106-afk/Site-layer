@@ -44,7 +44,7 @@
 
 4. **（任意）render-serviceを設定してサイト①へのアクセスをPuppeteer Stealth化**
 
-   サイト①のボット対策が強く、Workerからの直接 `fetch()` がブロックされてしまう場合は、`render-service/README.md` の手順で別ホスト（Railway等）にPuppeteer Stealthのサービスをデプロイし、同じく「Settings」→「Variables and Secrets」で以下を追加してください。
+   サイト①のボット対策が強く、Workerからの直接 `fetch()` がブロックされてしまう場合は、`render-service/README.md` の手順で別ホスト（Google Cloud Run・東京リージョン）にPuppeteer Stealthのサービスをデプロイし、同じく「Settings」→「Variables and Secrets」で以下を追加してください。
    - `RENDER_SERVICE_URL`（Variable） = `https://<render-serviceのURL>/render`
    - `RENDER_SERVICE_TOKEN`（Secret） = render-service側に設定したのと同じトークン
 
